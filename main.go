@@ -6,36 +6,24 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
+	"os"
+	"time"
 
 	pb "mod_ex/proto"
 
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 )
 
-// func recordMetrics() {
-// 	go func() {
-// 		for {
-// 			opsProcessed.Inc()
-// 			time.Sleep(2 * time.Second)
-// 		}
-// 	}()
-// }
-
-// var (
-// 	opsProcessed = promauto.NewCounter(prometheus.CounterOpts{
-// 		Name: "myapp_processed_ops_total",
-// 		Help: "The total number of processed events",
-// 	})
-// )
+var Data []string
+var counter int
 
 type Server struct {
 	pb.UnimplementedEXSServer
 }
 
 func (s *Server) GetSingleInfo(ctx context.Context, req *pb.SimpleRequest) (*pb.SimpleResponse, error) {
+
 	return &pb.SimpleResponse{Name: "OKAY"}, nil
 }
 func (s *Server) GetStreamInfo(stream grpc.BidiStreamingServer[pb.SimpleRequest, pb.SimpleResponse]) error {
@@ -46,6 +34,7 @@ func (s *Server) GetStreamInfo(stream grpc.BidiStreamingServer[pb.SimpleRequest,
 		}
 		if err != nil {
 			return err
+
 		}
 		if err := stream.Send(&pb.SimpleResponse{Name: in.Name}); err != nil {
 			return err
@@ -53,6 +42,18 @@ func (s *Server) GetStreamInfo(stream grpc.BidiStreamingServer[pb.SimpleRequest,
 
 	}
 
+}
+func timeInterseptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	start := time.Now()
+	resp, err = handler(ctx, req)
+	if err != nil {
+		log.Printf("Request %s failed: %v", info.FullMethod, err)
+		return nil, err
+	}
+	Data = append(Data, fmt.Sprintf("%d\n", time.Since(start).Nanoseconds()))
+	counter++
+	// log.Printf("Request %s took %s", info.FullMethod, time.Since(start))
+	return resp, err
 }
 
 func main() {
@@ -64,24 +65,30 @@ func main() {
 
 	grpcServer := grpc.NewServer(
 		grpc.StreamInterceptor(grpc_prometheus.StreamServerInterceptor),
-		grpc.UnaryInterceptor(grpc_prometheus.UnaryServerInterceptor),
+		// grpc.UnaryInterceptor(grpc_promethesus.UnaryServerInterceptor),
+		grpc.UnaryInterceptor(timeInterseptor),
 	)
 	pb.RegisterEXSServer(grpcServer, &Server{})
+
 	log.Println("Server is running on port :50051")
-	go grpcServer.Serve(lis)
-	func() {
-		// recordMetrics()
-		log.Println("Prometheus metrics server is running on port :9092")
-		PrometeusHttpServer := http.Server{
+	go func() {
+		for {
+			if counter == 1000000 {
 
-			Addr:    ":9092",
-			Handler: promhttp.Handler(),
-		}
-		http.Handle("/metrics", promhttp.Handler())
+				fileName := "Data2parallel.txt"
+				file, err := os.Create(fileName)
+				if err != nil {
+					fmt.Println("Unable to create file:", err)
+				}
+				defer file.Close()
+				for _, val := range Data {
+					file.WriteString(val)
+				}
 
-		if err := PrometeusHttpServer.ListenAndServe(); err != nil {
-			log.Fatalf("failed to start Prometheus HTTP server: %v", err)
+				fmt.Println("Done.")
+			}
 		}
 	}()
+	grpcServer.Serve(lis)
 
 }
